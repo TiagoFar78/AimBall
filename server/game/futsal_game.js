@@ -11,6 +11,7 @@ const {
     POST_RADIUS,
     BALL_RADIUS,
     KICK_SPEED,
+    KICK_COOLDOWN_MILLIS,
     BALL_FRICTION,
     PLAYER_RADIUS,
     PLAYER_ACCELERATION,
@@ -36,6 +37,59 @@ const teamsSpawns = [[
     { x: ARENA_WIDTH / 2 + spawnDistanceFromCenter * Math.cos(FIELD_PLAYER_SPAWN_ANGLE), y: ARENA_HEIGHT / 2 - spawnDistanceFromCenter * Math.sin(FIELD_PLAYER_SPAWN_ANGLE) },
 ]];
 
+function handleCollisionSingle(movableObject, limit, bounce, axis, axisVelocity, compareFunc) {
+    if (compareFunc(movableObject[axis], limit)) {
+        movableObject[axis] = limit;
+        movableObject[axisVelocity] *= -bounce;
+    }
+}
+
+function handleCollision(movableObject, min, max, bounce, axis, axisVelocity) {
+    handleCollisionSingle(movableObject, min, bounce, axis, axisVelocity, (d, r) => d < r);
+    handleCollisionSingle(movableObject, max, bounce, axis, axisVelocity, (d, r) => d > r);
+}
+
+function handleCollisionOnX(movableObject, min, max, bounce) {
+    handleCollision(movableObject, min, max, bounce, 'x', 'vx');
+}
+
+function handleCollisionOnY(movableObject, min, max, bounce) {
+    handleCollision(movableObject, min, max, bounce, 'y', 'vy');
+}
+
+function handleCollisionWithCircle(movableObject, cx, cy, radius, bounce, compareFunc) {
+    const dx = movableObject.x - cx;
+    const dy = movableObject.y - cy;
+    const dist = Math.hypot(dx, dy);
+    if (compareFunc(dist, radius)) {
+        const angle = Math.atan2(movableObject.y - cy, movableObject.x - cx);
+        movableObject.x = cx + radius * Math.cos(angle);
+        movableObject.y = cy + radius * Math.sin(angle);
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const dotProduct = movableObject.vx * nx + movableObject.vy * ny;
+        const factor = 1 + bounce;
+        movableObject.vx -= factor * dotProduct * nx;
+        movableObject.vy -= factor * dotProduct * ny;
+    }
+}
+
+function handleCollisionWithCircleInside(movableObject, cx, cy, radius, bounce) {
+    handleCollisionWithCircle(movableObject, cx, cy, radius, bounce, (d, r) => d > r);
+}
+
+function handleCollisionWithCircleOutside(movableObject, cx, cy, radius, bounce) {
+    handleCollisionWithCircle(movableObject, cx, cy, radius, bounce, (d, r) => d < r);
+}
+
+function handleCollisionWithPosts(movableObject, objectRadius, bounce) {
+    const posts = [ { x: 0, y: goalTop }, { x: 0, y: goalBottom }, { x: ARENA_WIDTH, y: goalTop }, { x: ARENA_WIDTH, y: goalBottom } ];
+    for (let post of posts) {
+        handleCollisionWithCircleOutside(movableObject, post.x, post.y, POST_RADIUS + objectRadius, bounce);
+    }
+}
+
 export function updateGame(state) {
     const { players, inputs, ball, score, ballPossession } = state;
     handlePlayerMovement(players, inputs, ballPossession);
@@ -49,105 +103,58 @@ function handlePlayerMovement(players, inputs, ballPossession) {
         const p = players[id];
         const input = inputs[id];
 
-        if (input.up) p.vy -= PLAYER_ACCELERATION;
-        if (input.down) p.vy += PLAYER_ACCELERATION;
-        if (input.left) p.vx -= PLAYER_ACCELERATION;
-        if (input.right) p.vx += PLAYER_ACCELERATION;
+        applyMovementPhysicsToPlayer(p, input);
+        handlePlayerCollisionWithMargin(p);
+        handleCollisionWithPosts(p, PLAYER_RADIUS, 0);
+        handlePlayerCollisionWithKickoffProtection(p, ballPossession);
+    }
+}
 
-        p.vy *= PLAYER_FRICTION;
-        p.vx *= PLAYER_FRICTION;
+function applyMovementPhysicsToPlayer(p, input) {
+    if (input.up) p.vy -= PLAYER_ACCELERATION;
+    if (input.down) p.vy += PLAYER_ACCELERATION;
+    if (input.left) p.vx -= PLAYER_ACCELERATION;
+    if (input.right) p.vx += PLAYER_ACCELERATION;
 
-        const speed = Math.hypot(p.vx, p.vy);
-        if (speed > PLAYER_MAX_SPEED) {
-            const scale = PLAYER_MAX_SPEED / speed;
-            p.vx *= scale;
-            p.vy *= scale;
-        }
+    p.vy *= PLAYER_FRICTION;
+    p.vx *= PLAYER_FRICTION;
 
-        p.x += p.vx;
-        p.y += p.vy;
+    const speed = Math.hypot(p.vx, p.vy);
+    if (speed > PLAYER_MAX_SPEED) {
+        const scale = PLAYER_MAX_SPEED / speed;
+        p.vx *= scale;
+        p.vy *= scale;
+    }
 
-        if (p.x < -PLAYER_OUT_MARGIN) {
-            p.x = -PLAYER_OUT_MARGIN;
-            p.vx = 0;
-        }
-        else if (p.x > ARENA_WIDTH + PLAYER_OUT_MARGIN) {
-            p.x = ARENA_WIDTH + PLAYER_OUT_MARGIN;
-            p.vx = 0;
-        }
+    p.x += p.vx;
+    p.y += p.vy;
+}
 
-        if (p.y < -PLAYER_OUT_MARGIN) {
-            p.y = -PLAYER_OUT_MARGIN;
-            p.vy = 0;
-        }
-        else if (p.y > ARENA_HEIGHT + PLAYER_OUT_MARGIN) {
-            p.y = ARENA_HEIGHT + PLAYER_OUT_MARGIN;
-            p.vy = 0;
-        }
+function handlePlayerCollisionWithMargin(p) {
+    handleCollisionOnX(p, -PLAYER_OUT_MARGIN, ARENA_WIDTH + PLAYER_OUT_MARGIN, 0);
+    handleCollisionOnY(p, -PLAYER_OUT_MARGIN, ARENA_HEIGHT + PLAYER_OUT_MARGIN, 0);
+}
 
-        const posts = [ { x: 0, y: goalTop }, { x: 0, y: goalBottom }, { x: ARENA_WIDTH, y: goalTop }, { x: ARENA_WIDTH, y: goalBottom } ];
-        for (let post of posts) {
-            const dx = p.x - post.x;
-            const dy = p.y - post.y;
+function handlePlayerCollisionWithKickoffProtection(p, ballPossession) {
+    if (ballPossession.until <= Date.now()) {
+        return;
+    }
 
-            const distance = Math.hypot(dx, dy);
-            const collisionDist = PLAYER_RADIUS + POST_RADIUS;
+    if (p.y > ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS || p.y < ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS) {
+        if (p.team == 0) handleCollisionSingle(p, ARENA_WIDTH / 2 - PLAYER_RADIUS, 0, 'x', 'vx', (d, r) => d > r);
+        else if (p.team == 1) handleCollisionSingle(p, ARENA_WIDTH / 2 + PLAYER_RADIUS, 0, 'x', 'vx', (d, r) => d < r);
+    }
 
-            if (distance < collisionDist) {
-                const nx = dx / distance;
-                const ny = dy / distance;
-
-                p.x = post.x + nx * collisionDist;
-                p.y = post.y + ny * collisionDist;
-
-                const dot = p.vx * nx + p.vy * ny;
-                p.vx -= 2 * dot * nx;
-                p.vy -= 2 * dot * ny;
-            }
-        }
-
-        if (ballPossession.until > Date.now()) {
-            if (p.y > ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS || p.y < ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS) {
-                if (p.team == 0) {
-                    if (p.x > ARENA_WIDTH / 2 - PLAYER_RADIUS) {
-                        p.x = ARENA_WIDTH / 2 - PLAYER_RADIUS;
-                        p.vx = 0;
-                    }
-                }
-                else if (p.team == 1) {
-                    if (p.x < ARENA_WIDTH / 2 + PLAYER_RADIUS) {
-                        p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS;
-                        p.vx = 0;
-                    }
-                }
-            }
-
-            const dist = Math.hypot(p.x - ARENA_WIDTH / 2, p.y - ARENA_HEIGHT / 2);
-            if (ballPossession.team != p.team) {
-                if (dist < MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) {
-                    const angle = Math.atan2(p.y - ARENA_HEIGHT / 2, p.x - ARENA_WIDTH / 2);
-                    p.x = ARENA_WIDTH / 2 + (MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) * Math.cos(angle);
-                    p.y = ARENA_HEIGHT / 2 + (MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) * Math.sin(angle);
-                }
-            }
-            else if ((p.team == 0 && p.x > ARENA_WIDTH / 2) || (p.team == 1 && p.x < ARENA_WIDTH / 2)) {
-                if (dist > MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) {
-                    const angle = Math.atan2(p.y - ARENA_HEIGHT / 2, p.x - ARENA_WIDTH / 2);
-                    p.x = ARENA_WIDTH / 2 + (MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) * Math.cos(angle);
-                    p.y = ARENA_HEIGHT / 2 + (MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) * Math.sin(angle);
-                }
-            }
-            else if (Math.hypot(p.x - ARENA_WIDTH / 2, p.y - (ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS)) < PLAYER_RADIUS) {
-                const angle = Math.atan2(p.y - (ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS), p.x - ARENA_WIDTH / 2);
-                p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS * Math.cos(angle);
-                p.y = ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS * Math.sin(angle);
-            }
-            else if (Math.hypot(p.x - ARENA_WIDTH / 2, p.y - (ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS)) < PLAYER_RADIUS) {
-                const angle = Math.atan2(p.y - (ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS), p.x - ARENA_WIDTH / 2);
-                p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS * Math.cos(angle);
-                p.y = ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS * Math.sin(angle);
-            }
-        }
+    const dist = Math.hypot(p.x - ARENA_WIDTH / 2, p.y - ARENA_HEIGHT / 2);
+    if (ballPossession.team != p.team) {
+        handleCollisionWithCircleOutside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2, MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS, 0);
+    }
+    else if ((p.team == 0 && p.x > ARENA_WIDTH / 2) || (p.team == 1 && p.x < ARENA_WIDTH / 2)) {
+        handleCollisionWithCircleInside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2, MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS, 0);
+    }
+    else {
+        handleCollisionWithCircleOutside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS, PLAYER_RADIUS, 0);
+        handleCollisionWithCircleOutside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS, PLAYER_RADIUS, 0);
     }
 }
 
@@ -162,8 +169,9 @@ function handlePlayerKick(players, inputs, ball, ballPossession) {
 
         const minDist = PLAYER_RADIUS + BALL_RADIUS;
 
-        if (distance < minDist && input.kick) {
+        if (distance <= minDist && input.kick && Date.now() > player.lastKick + KICK_COOLDOWN_MILLIS) {
             ballPossession.until = 0;
+            player.lastKick = Date.now();
 
             const aimX = input.mouseX - ball.x;
             const aimY = input.mouseY - ball.y;
@@ -181,77 +189,31 @@ function handlePlayerKick(players, inputs, ball, ballPossession) {
 }
 
 function handleBallMovement(ball) {
+    applyMovementPhysicsToBall(ball);
+    handleBallCollisionWithFieldBorder(ball);
+    handleCollisionWithPosts(ball, BALL_RADIUS, 1);
+    handleBallCollisionWithNet(ball);
+}
+
+function applyMovementPhysicsToBall(ball) {
     ball.vx *= BALL_FRICTION;
     ball.vy *= BALL_FRICTION;
 
     ball.x += ball.vx;
     ball.y += ball.vy;
+}
 
-    // horizontal walls collision
-    if (ball.y < BALL_RADIUS) {
-        ball.y = BALL_RADIUS;
-        ball.vy *= -1;
+function handleBallCollisionWithFieldBorder(ball) {
+    handleCollisionOnY(ball, BALL_RADIUS, ARENA_HEIGHT - BALL_RADIUS, 1);
+    if (ball.y < goalTop || ball.y > goalBottom) {
+        handleCollisionOnX(ball, BALL_RADIUS, ARENA_WIDTH - BALL_RADIUS, 1);
     }
-    else if (ball.y > ARENA_HEIGHT - BALL_RADIUS) {
-        ball.y = ARENA_HEIGHT - BALL_RADIUS;
-        ball.vy *= -1;
-    }
+}
 
-    // posts collision
-    const posts = [ { x: 0, y: goalTop }, { x: 0, y: goalBottom }, { x: ARENA_WIDTH, y: goalTop }, { x: ARENA_WIDTH, y: goalBottom } ];
-    for (let post of posts) {
-        const dx = ball.x - post.x;
-        const dy = ball.y - post.y;
-
-        const distance = Math.hypot(dx, dy);
-        const minDist = BALL_RADIUS + POST_RADIUS;
-
-        if (distance < minDist) {
-            const nx = dx / distance;
-            const ny = dy / distance;
-
-            ball.x = post.x + nx * minDist;
-            ball.y = post.y + ny * minDist;
-
-            const dot = ball.vx * nx + ball.vy * ny;
-            ball.vx -= 2 * dot * nx;
-            ball.vy -= 2 * dot * ny;
-        }
-    }
-
-    // vertical walls collision
-    if (ball.x < BALL_RADIUS) {
-        if (ball.y < goalTop || ball.y > goalBottom) {
-            ball.x = BALL_RADIUS;
-            ball.vx *= -1;
-        }
-    }
-    else if (ball.x > ARENA_WIDTH - BALL_RADIUS) {
-        if (ball.y < goalTop || ball.y > goalBottom) {
-            ball.x = ARENA_WIDTH - BALL_RADIUS;
-            ball.vx *= -1;
-        }
-    }
-
-    // net collision
-    if (ball.x < BALL_RADIUS - GOAL_DEPTH) {
-        ball.x = BALL_RADIUS;
-        ball.vx *= -0.5;
-    }
-    else if (ball.x > ARENA_WIDTH + GOAL_DEPTH - BALL_RADIUS) {
-        ball.x = ARENA_WIDTH + GOAL_DEPTH - BALL_RADIUS;
-        ball.vx *= -0.5;
-    }
-
+function handleBallCollisionWithNet(ball) {
+    handleCollisionOnX(ball, BALL_RADIUS - GOAL_DEPTH, ARENA_WIDTH + GOAL_DEPTH - BALL_RADIUS, 0.5);
     if (ball.x < 0 || ball.x > ARENA_WIDTH) {
-        if (ball.y > goalBottom - BALL_RADIUS) {
-            ball.y = goalBottom - BALL_RADIUS;
-            ball.vy *= -0.5;
-        }
-        else if (ball.y < goalTop + BALL_RADIUS) {
-            ball.y = goalTop + BALL_RADIUS;
-            ball.vy *= -0.5;
-        }
+        handleCollisionOnY(ball, goalBottom - BALL_RADIUS, goalTop + BALL_RADIUS, 0.5);
     }
 }
 
@@ -268,6 +230,18 @@ function handleGoal(players, ball, score, ballPossession) {
         return;
     }
 
+    restartRound(ball, players, ballPossession);
+}
+
+export function restartGame(state) {
+    state.score.left = 0;
+    state.score.right = 0;
+    state.ballPossession.team = 0;
+
+    restartRound(state.ball, state.players, state.ballPossession);
+}
+
+function restartRound(ball, players, ballPossession) {
     ball.x = ARENA_WIDTH / 2;
     ball.y = ARENA_HEIGHT / 2;
     ball.vx = 0;

@@ -297,3 +297,20 @@ window.setName = function(name) {
         }));
     }
 };
+
+window.resetScore = function() {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: "resetScore"
+        }));
+    }
+};
+
+window.teams = function(teamZero, teamOne) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: "teams",
+            teams: [ teamZero, teamOne ]
+        }));
+    }
+};

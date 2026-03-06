@@ -1,9 +1,9 @@
 import { WebSocketServer } from "ws";
 import { createBall, createPlayer } from "./game/state.js";
-import { updateGame } from "./game/futsal_game.js";
+import { updateGame, restartGame } from "./game/futsal_game.js";
 import { CONSTANTS } from "../shared/constants.js";
 
-const { MAX_PLAYERS, POSSESSION_SECONDS, TICK_RATE } = CONSTANTS;
+const { MAX_PLAYERS, TICK_RATE } = CONSTANTS;
 
 const wss = new WebSocketServer({ port: 8081 });
 
@@ -12,7 +12,7 @@ let state = {
     inputs: {},
     ball: createBall(),
     score: { left: 0, right: 0 },
-    ballPossession: { team: 0, until: Date.now() + POSSESSION_SECONDS * 1000 }
+    ballPossession: { team: 0, until: 0 }
 };
 
 wss.on("connection", (ws) => {
@@ -30,6 +30,20 @@ wss.on("connection", (ws) => {
                 const name = data.name.trim().slice(0, 16);
                 state.players[id].name = name;
             }
+        }
+        else if (data.type === "resetScore") {
+            restartGame(state);
+        }
+        else if (data.type === "teams") {
+            for (let playerId of data.teams[0]) {
+                state.players[playerId].team = 0;
+            }
+
+            for (let playerId of data.teams[1]) {
+                state.players[playerId].team = 1;
+            }
+
+            restartGame(state);
         }
     });
 
