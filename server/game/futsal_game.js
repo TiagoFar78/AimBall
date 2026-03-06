@@ -1,11 +1,13 @@
 import { CONSTANTS } from "../../shared/constants.js";
 
-const { 
+const {
+    MAX_PLAYERS,
     ARENA_WIDTH,
     ARENA_HEIGHT,
     PLAYER_OUT_MARGIN,
     GOAL_WIDTH,
     GOAL_DEPTH,
+    MIDDLE_CIRCLE_RADIUS,
     POST_RADIUS,
     BALL_RADIUS,
     KICK_SPEED,
@@ -13,22 +15,36 @@ const {
     PLAYER_RADIUS,
     PLAYER_ACCELERATION,
     PLAYER_FRICTION,
-    PLAYER_MAX_SPEED
+    PLAYER_MAX_SPEED,
+    SPAWN_DISTANCE_RELATIVE,
+    FIELD_PLAYER_SPAWN_ANGLE,
+    POSSESSION_SECONDS,
+    GOAL_CELEBRATION_SECONDS
 } = CONSTANTS;
-
 
 const goalTop = (ARENA_HEIGHT / 2) - (GOAL_WIDTH / 2);
 const goalBottom = (ARENA_HEIGHT / 2) + (GOAL_WIDTH / 2);
 
+const spawnDistanceFromCenter = SPAWN_DISTANCE_RELATIVE * ARENA_WIDTH / 2;
+const teamsSpawns = [[
+    { x: ARENA_WIDTH / 2 - spawnDistanceFromCenter, y: ARENA_HEIGHT / 2 },
+    { x: ARENA_WIDTH / 2 - spawnDistanceFromCenter * Math.cos(FIELD_PLAYER_SPAWN_ANGLE), y: ARENA_HEIGHT / 2 + spawnDistanceFromCenter * Math.sin(FIELD_PLAYER_SPAWN_ANGLE) },
+    { x: ARENA_WIDTH / 2 - spawnDistanceFromCenter * Math.cos(FIELD_PLAYER_SPAWN_ANGLE), y: ARENA_HEIGHT / 2 - spawnDistanceFromCenter * Math.sin(FIELD_PLAYER_SPAWN_ANGLE) },
+], [
+    { x: ARENA_WIDTH / 2 + spawnDistanceFromCenter, y: ARENA_HEIGHT / 2 },
+    { x: ARENA_WIDTH / 2 + spawnDistanceFromCenter * Math.cos(FIELD_PLAYER_SPAWN_ANGLE), y: ARENA_HEIGHT / 2 + spawnDistanceFromCenter * Math.sin(FIELD_PLAYER_SPAWN_ANGLE) },
+    { x: ARENA_WIDTH / 2 + spawnDistanceFromCenter * Math.cos(FIELD_PLAYER_SPAWN_ANGLE), y: ARENA_HEIGHT / 2 - spawnDistanceFromCenter * Math.sin(FIELD_PLAYER_SPAWN_ANGLE) },
+]];
+
 export function updateGame(state) {
-    const { players, inputs, ball, score } = state;
-    handlePlayerMovement(players, inputs);
-    handlePlayerKick(players, inputs, ball);
+    const { players, inputs, ball, score, ballPossession } = state;
+    handlePlayerMovement(players, inputs, ballPossession);
+    handlePlayerKick(players, inputs, ball, ballPossession);
     handleBallMovement(ball);
-    handleGoal(ball, score);
+    handleGoal(players, ball, score, ballPossession);
 }
 
-function handlePlayerMovement(players, inputs) {
+function handlePlayerMovement(players, inputs, ballPossession) {
     for (let id in players) {
         const p = players[id];
         const input = inputs[id];
@@ -89,10 +105,53 @@ function handlePlayerMovement(players, inputs) {
                 p.vy -= 2 * dot * ny;
             }
         }
+
+        if (ballPossession.until > Date.now()) {
+            if (p.y > ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS || p.y < ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS) {
+                if (p.team == 0) {
+                    if (p.x > ARENA_WIDTH / 2 - PLAYER_RADIUS) {
+                        p.x = ARENA_WIDTH / 2 - PLAYER_RADIUS;
+                        p.vx = 0;
+                    }
+                }
+                else if (p.team == 1) {
+                    if (p.x < ARENA_WIDTH / 2 + PLAYER_RADIUS) {
+                        p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS;
+                        p.vx = 0;
+                    }
+                }
+            }
+
+            const dist = Math.hypot(p.x - ARENA_WIDTH / 2, p.y - ARENA_HEIGHT / 2);
+            if (ballPossession.team != p.team) {
+                if (dist < MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) {
+                    const angle = Math.atan2(p.y - ARENA_HEIGHT / 2, p.x - ARENA_WIDTH / 2);
+                    p.x = ARENA_WIDTH / 2 + (MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) * Math.cos(angle);
+                    p.y = ARENA_HEIGHT / 2 + (MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS) * Math.sin(angle);
+                }
+            }
+            else if ((p.team == 0 && p.x > ARENA_WIDTH / 2) || (p.team == 1 && p.x < ARENA_WIDTH / 2)) {
+                if (dist > MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) {
+                    const angle = Math.atan2(p.y - ARENA_HEIGHT / 2, p.x - ARENA_WIDTH / 2);
+                    p.x = ARENA_WIDTH / 2 + (MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) * Math.cos(angle);
+                    p.y = ARENA_HEIGHT / 2 + (MIDDLE_CIRCLE_RADIUS - PLAYER_RADIUS) * Math.sin(angle);
+                }
+            }
+            else if (Math.hypot(p.x - ARENA_WIDTH / 2, p.y - (ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS)) < PLAYER_RADIUS) {
+                const angle = Math.atan2(p.y - (ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS), p.x - ARENA_WIDTH / 2);
+                p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS * Math.cos(angle);
+                p.y = ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS * Math.sin(angle);
+            }
+            else if (Math.hypot(p.x - ARENA_WIDTH / 2, p.y - (ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS)) < PLAYER_RADIUS) {
+                const angle = Math.atan2(p.y - (ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS), p.x - ARENA_WIDTH / 2);
+                p.x = ARENA_WIDTH / 2 + PLAYER_RADIUS * Math.cos(angle);
+                p.y = ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS + PLAYER_RADIUS * Math.sin(angle);
+            }
+        }
     }
 }
 
-function handlePlayerKick(players, inputs, ball) {
+function handlePlayerKick(players, inputs, ball, ballPossession) {
     for (let id in players) {
         const player = players[id];
         const input = inputs[id];
@@ -104,6 +163,7 @@ function handlePlayerKick(players, inputs, ball) {
         const minDist = PLAYER_RADIUS + BALL_RADIUS;
 
         if (distance < minDist && input.kick) {
+            ballPossession.until = 0;
 
             const aimX = input.mouseX - ball.x;
             const aimY = input.mouseY - ball.y;
@@ -195,20 +255,35 @@ function handleBallMovement(ball) {
     }
 }
 
-function handleGoal(ball, score) {
+function handleGoal(players, ball, score, ballPossession) {
     if (ball.x < -BALL_RADIUS && ball.y > goalTop && ball.y < goalBottom) {
         score.right += 1;
-        resetBall(ball);
+        ballPossession.team = 0;
     }
     else if (ball.x > ARENA_WIDTH + BALL_RADIUS && ball.y > goalTop && ball.y < goalBottom) {
         score.left += 1;
-        resetBall(ball);
+        ballPossession.team = 1;
     }
-}
+    else {
+        return;
+    }
 
-function resetBall(ball) {
     ball.x = ARENA_WIDTH / 2;
     ball.y = ARENA_HEIGHT / 2;
     ball.vx = 0;
     ball.vy = 0;
+
+    const teamsPlayers = [ 0, 0 ];
+    for (let playerIndex in players) {
+        const p = players[playerIndex];
+
+        p.x = teamsSpawns[p.team][teamsPlayers[p.team] % MAX_PLAYERS].x;
+        p.y = teamsSpawns[p.team][teamsPlayers[p.team] % MAX_PLAYERS].y;
+        p.vx = 0;
+        p.vy = 0;
+
+        teamsPlayers[p.team]++;
+    }
+
+    ballPossession.until = Date.now() + GOAL_CELEBRATION_SECONDS * 1000 + POSSESSION_SECONDS * 1000;
 }

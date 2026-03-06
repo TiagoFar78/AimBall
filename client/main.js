@@ -1,10 +1,13 @@
 import { CONSTANTS } from "../shared/constants.js";
 
-const { 
+const {
+    TEAM_0_COLOR,
+    TEAM_1_COLOR,
     ARENA_WIDTH,
     ARENA_HEIGHT,
     GOAL_WIDTH,
     GOAL_DEPTH,
+    MIDDLE_CIRCLE_RADIUS,
     POST_RADIUS,
     BALL_RADIUS,
     PLAYER_RADIUS
@@ -14,6 +17,7 @@ let socket;
 let graphics;
 let scoreText;
 
+let playersLabels = {};
 let players = {};
 let ball = null;
 let score = { left: 0, right: 0 };
@@ -50,6 +54,14 @@ function create() {
             players = data.players;
             ball = data.ball;
             score = data.score;
+        }
+        else if (data.type === "removePlayer") {
+            const id = data.id;
+            if (playersLabels[id]) {
+                playersLabels[id].id.destroy();
+                playersLabels[id].name.destroy();
+                delete playersLabels[id];
+            }
         }
     };
 
@@ -173,6 +185,21 @@ function update() {
     graphics.fillCircle(fieldX + ARENA_WIDTH, goalTop, POST_RADIUS);
     graphics.fillCircle(fieldX + ARENA_WIDTH, goalBottom, POST_RADIUS);
 
+    // Midfield line
+    graphics.lineStyle(2, 0xffffff, 1);
+
+    graphics.beginPath();
+    graphics.moveTo(fieldX + ARENA_WIDTH / 2, fieldY);
+    graphics.lineTo(fieldX + ARENA_WIDTH / 2, fieldY + ARENA_HEIGHT);
+    graphics.strokePath();
+
+    // Center circle
+    graphics.lineStyle(2, 0xffffff, 1);
+    graphics.strokeCircle(fieldX + ARENA_WIDTH / 2, fieldY + ARENA_HEIGHT / 2, MIDDLE_CIRCLE_RADIUS);
+
+    graphics.fillStyle(0xffffff);
+    graphics.fillCircle(fieldX + ARENA_WIDTH / 2, fieldY + ARENA_HEIGHT / 2, BALL_RADIUS);
+
     // ---------------------
     // Players
     // ---------------------
@@ -180,12 +207,24 @@ function update() {
     for (let id in players) {
         const p = players[id];
 
-        graphics.fillStyle(0x00ff00);
+        graphics.fillStyle(p.team == 0 ? TEAM_0_COLOR : TEAM_1_COLOR);
         graphics.fillCircle(
             fieldX + p.x,
             fieldY + p.y,
             PLAYER_RADIUS
         );
+
+        if (!playersLabels[id]) {
+            playersLabels[id] = { 
+                id: this.add.text(0, 0, p.id, { fontSize: '30px', color: '#ffffff' }).setOrigin(0.5),
+                name: this.add.text(0, 0, p.name, { fontSize: '20px', color: '#ffffff' }).setOrigin(0.5, 0)
+            };
+        }
+        else {
+            playersLabels[id].id.setPosition(fieldX + p.x, fieldY + p.y);
+            playersLabels[id].name.setPosition(fieldX + p.x, fieldY + p.y + PLAYER_RADIUS + 4);
+            playersLabels[id].name.setText(p.name);
+        }
     }
 
     // ---------------------
@@ -249,3 +288,12 @@ function setupInput(scene) {
         }
     });
 }
+
+window.setName = function(name) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({
+            type: "setName",
+            name: name
+        }));
+    }
+};

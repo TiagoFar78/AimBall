@@ -1,6 +1,6 @@
 import { CONSTANTS } from "../../shared/constants.js";
 
-const { ARENA_WIDTH, ARENA_HEIGHT } = CONSTANTS;
+const { ARENA_WIDTH, ARENA_HEIGHT, ONGOING_JOIN_SPAWN_DISTANCE } = CONSTANTS;
 
 export function createBall() {
     return {
@@ -11,10 +11,15 @@ export function createBall() {
     };
 }
 
-export function createPlayer() {
+export function createPlayer(id, team) {
+    const teamZeroSpawn = ARENA_WIDTH / 2 * ONGOING_JOIN_SPAWN_DISTANCE;
+    const teamOneSpawn = ARENA_WIDTH / 2 - teamZeroSpawn + ARENA_WIDTH;
     return {
-        x: 200 + Math.random() * 400,
-        y: 150 + Math.random() * 200,
+        id: id,
+        name: "Player" + id,
+        team: team,
+        x: team == 0 ? teamZeroSpawn : teamOneSpawn,
+        y: ARENA_HEIGHT / 2,
         vx: 0,
         vy: 0,
         lastKick: 0
