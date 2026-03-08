@@ -1,4 +1,5 @@
-import { CONSTANTS } from "../../shared/constants.js";
+import { CONSTANTS, MESSAGES_TYPES } from "../../shared/constants.js";
+import { sendMessage } from "../server.js";
 
 const {
     MAX_PLAYERS,
@@ -19,9 +20,66 @@ const {
     PLAYER_MAX_SPEED,
     SPAWN_DISTANCE_RELATIVE,
     FIELD_PLAYER_SPAWN_ANGLE,
+    ONGOING_JOIN_SPAWN_DISTANCE,
     POSSESSION_SECONDS,
     GOAL_CELEBRATION_SECONDS
 } = CONSTANTS;
+
+const { STATE_MESSAGE, GOAL_MESSAGE, REMOVE_PLAYER_MESSAGE } = MESSAGES_TYPES;
+
+// Game state
+
+let state = {
+    players: {},
+    inputs: {},
+    ball: { x: ARENA_WIDTH / 2, y: ARENA_HEIGHT / 2, vx: 0, vy: 0 },
+    score: { left: 0, right: 0, alreadyUpdated: false },
+    ballPossession: { team: 0, until: 0 }
+};
+
+export function createPlayer(id, team) {
+    const teamZeroSpawn = ARENA_WIDTH / 2 * ONGOING_JOIN_SPAWN_DISTANCE;
+    const teamOneSpawn = ARENA_WIDTH / 2 - teamZeroSpawn + ARENA_WIDTH;
+    state.players[id] = {
+        id: id,
+        name: "Player" + id,
+        team: team,
+        x: team == 0 ? teamZeroSpawn : teamOneSpawn,
+        y: ARENA_HEIGHT / 2,
+        vx: 0,
+        vy: 0,
+        lastKick: 0
+    };
+    state.inputs[id] = {};
+}
+
+export function removePlayer(id) {
+    delete state.players[id];
+    delete state.inputs[id];
+    sendMessage({ type: REMOVE_PLAYER_MESSAGE, id: id });
+}
+
+export function changeName(id, newName) {
+    state.players[id].name = newName;
+}
+
+export function applyPlayerInput(id, input) {
+    state.inputs[id] = input;
+}
+
+export function setTeams(teams) {
+    for (let playerId of teams[0]) {
+        state.players[playerId].team = 0;
+    }
+
+    for (let playerId of teams[1]) {
+        state.players[playerId].team = 1;
+    }
+
+    restartGame(state);
+}
+
+// Game loop
 
 const goalTop = (ARENA_HEIGHT / 2) - (GOAL_WIDTH / 2);
 const goalBottom = (ARENA_HEIGHT / 2) + (GOAL_WIDTH / 2);
@@ -90,12 +148,13 @@ function handleCollisionWithPosts(movableObject, objectRadius, bounce) {
     }
 }
 
-export function updateGame(state) {
+export function updateGame() {
     const { players, inputs, ball, score, ballPossession } = state;
     handlePlayerMovement(players, inputs, ballPossession);
     handlePlayerKick(players, inputs, ball, ballPossession);
     handleBallMovement(ball);
     handleGoal(players, ball, score, ballPossession);
+    sendMessage({ type: STATE_MESSAGE, ...state });
 }
 
 function handlePlayerMovement(players, inputs, ballPossession) {
@@ -107,6 +166,11 @@ function handlePlayerMovement(players, inputs, ballPossession) {
         handlePlayerCollisionWithMargin(p);
         handleCollisionWithPosts(p, PLAYER_RADIUS, 0);
         handlePlayerCollisionWithKickoffProtection(p, ballPossession);
+        for (let id2 in players) {
+            if (id != id2) {
+                handlePlayerCollisionWithPlayer(p, players[id2], 0.5);
+            }
+        }
     }
 }
 
@@ -156,6 +220,36 @@ function handlePlayerCollisionWithKickoffProtection(p, ballPossession) {
         handleCollisionWithCircleOutside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 + MIDDLE_CIRCLE_RADIUS, PLAYER_RADIUS, 0);
         handleCollisionWithCircleOutside(p, ARENA_WIDTH / 2, ARENA_HEIGHT / 2 - MIDDLE_CIRCLE_RADIUS, PLAYER_RADIUS, 0);
     }
+}
+
+function handlePlayerCollisionWithPlayer(p1, p2, bounce) {
+    const dx = p1.x - p2.x;
+    const dy = p1.y - p2.y;
+
+    const dist = Math.hypot(dx, dy);
+    const minDist = PLAYER_RADIUS * 2;
+    if (dist == 0 || dist >= minDist) return;
+
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const overlap = minDist - dist;
+    p1.x += nx * overlap * 0.5;
+    p1.y += ny * overlap * 0.5;
+    p2.x -= nx * overlap * 0.5;
+    p2.y -= ny * overlap * 0.5;
+
+    const rvx = p1.vx - p2.vx;
+    const rvy = p1.vy - p2.vy;
+    const dot = rvx * nx + rvy * ny;
+    if (dot > 0) return;
+
+    const factor = 1 + bounce;
+    const impulseX = factor * dot * nx;
+    const impulseY = factor * dot * ny;
+    p1.vx -= impulseX * 0.5;
+    p1.vy -= impulseY * 0.5;
+    p2.vx += impulseX * 0.5;
+    p2.vy += impulseY * 0.5;
 }
 
 function handlePlayerKick(players, inputs, ball, ballPossession) {
@@ -211,13 +305,17 @@ function handleBallCollisionWithFieldBorder(ball) {
 }
 
 function handleBallCollisionWithNet(ball) {
-    handleCollisionOnX(ball, BALL_RADIUS - GOAL_DEPTH, ARENA_WIDTH + GOAL_DEPTH - BALL_RADIUS, 0.5);
+    handleCollisionOnX(ball, BALL_RADIUS - GOAL_DEPTH, ARENA_WIDTH + GOAL_DEPTH - BALL_RADIUS, 0.1);
     if (ball.x < 0 || ball.x > ARENA_WIDTH) {
-        handleCollisionOnY(ball, goalBottom - BALL_RADIUS, goalTop + BALL_RADIUS, 0.5);
+        handleCollisionOnY(ball, goalTop + BALL_RADIUS, goalBottom - BALL_RADIUS, 0.1);
     }
 }
 
 function handleGoal(players, ball, score, ballPossession) {
+    if (score.alreadyUpdated) {
+        return;
+    }
+
     if (ball.x < -BALL_RADIUS && ball.y > goalTop && ball.y < goalBottom) {
         score.right += 1;
         ballPossession.team = 0;
@@ -230,10 +328,15 @@ function handleGoal(players, ball, score, ballPossession) {
         return;
     }
 
-    restartRound(ball, players, ballPossession);
+    sendMessage({ type: GOAL_MESSAGE, team: ballPossession.team });
+    score.alreadyUpdated = true;
+    setTimeout(() => {
+        restartRound(ball, players, ballPossession);
+        score.alreadyUpdated = false;
+    }, GOAL_CELEBRATION_SECONDS * 1000);
 }
 
-export function restartGame(state) {
+export function restartGame() {
     state.score.left = 0;
     state.score.right = 0;
     state.ballPossession.team = 0;
@@ -259,5 +362,5 @@ function restartRound(ball, players, ballPossession) {
         teamsPlayers[p.team]++;
     }
 
-    ballPossession.until = Date.now() + GOAL_CELEBRATION_SECONDS * 1000 + POSSESSION_SECONDS * 1000;
+    ballPossession.until = Date.now() + POSSESSION_SECONDS * 1000;
 }

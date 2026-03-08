@@ -24,3 +24,13 @@ export const CONSTANTS = {
     GOAL_CELEBRATION_SECONDS: 3,
     TICK_RATE: 60
 };
+
+export const MESSAGES_TYPES = {
+    STATE_MESSAGE: "state",
+    INPUT_MESSAGE: "input",
+    SET_NAME_MESSAGE: "setName",
+    RESET_SCORE_MESSAGE: "resetScore",
+    GOAL_MESSAGE: "goal",
+    TEAMS_MESSAGE: "teams",
+    REMOVE_PLAYER_MESSAGE: "input"
+};
