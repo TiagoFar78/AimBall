@@ -40,7 +40,7 @@ let score = { left: 0, right: 0 };
 let fieldOffset = { x: 0, y: 0 };
 
 function create() {
-    socket = new WebSocket("ws://localhost:8081");
+    socket = new WebSocket(`ws://${location.host}`);
 
     const handlers = {
         [STATE_MESSAGE]: (d) => updateState(d),

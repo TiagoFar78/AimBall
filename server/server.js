@@ -1,4 +1,8 @@
+import express from "express";
 import { WebSocketServer } from "ws";
+import path from "path";
+import { fileURLToPath } from "url";
+
 import { createPlayer, removePlayer, applyPlayerInput, changeName, setTeams, updateGame, restartGame } from "./game/futsal_game.js";
 import { bookId, freeId } from "./ids_manager.js";
 import { CONSTANTS, MESSAGES_TYPES } from "../shared/constants.js";
@@ -7,7 +11,16 @@ const { INPUT_MESSAGE, SET_NAME_MESSAGE, RESET_SCORE_MESSAGE, TEAMS_MESSAGE } = 
 
 const { TICK_RATE } = CONSTANTS;
 
-const wss = new WebSocketServer({ port: 8081 });
+const app = express();
+const PORT = 8081;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+app.use(express.static(path.join(__dirname, "../client")));
+app.use("/shared", express.static(path.join(__dirname, "../shared")));
+
+const server = app.listen(PORT, () => { console.log("Server running on port", PORT); });
+const wss = new WebSocketServer({ server });
 
 const handlers = {
     [INPUT_MESSAGE]: (id, d) => applyPlayerInput(id, d.input),

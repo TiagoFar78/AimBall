@@ -168,7 +168,7 @@ function handlePlayerMovement(players, inputs, ballPossession) {
         handlePlayerCollisionWithKickoffProtection(p, ballPossession);
         for (let id2 in players) {
             if (id != id2) {
-                handlePlayerCollisionWithPlayer(p, players[id2], 0.5);
+                handlePlayerCollisionWithPlayer(p, players[id2], 0);
             }
         }
     }
