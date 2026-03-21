@@ -19,7 +19,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(path.join(__dirname, "../client")));
 app.use("/shared", express.static(path.join(__dirname, "../shared")));
 
-const server = app.listen(PORT, () => { console.log("Server running on port", PORT); });
+const server = app.listen(PORT, "0.0.0.0", () => { console.log("Server running on port", PORT); });
 const wss = new WebSocketServer({ server });
 
 const handlers = {
